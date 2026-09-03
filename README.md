@@ -102,12 +102,41 @@ g++ -std=c++17 -O2 -Isrc src/*.cpp -o bank
 
 ## Usage
 
+Run with no command for the interactive menu, or pass a command to script it.
+
 ```
-bank                 use ./bank_data.txt as the data file
-bank --db <path>     use a different data file
-bank --help          show usage
-bank --version       print the version
+bank                              use ./bank_data.txt as the data file
+bank --db <path>                  use a different data file
+bank --help                       show usage
+bank --version                    print the version
 ```
+
+### Scriptable commands
+
+Each command runs one operation, prints the result, saves, and exits with a
+status code (`0` success, `1` refused/not found, `2` bad usage) — so it drops
+straight into a shell script or CI without driving the menu through a pipe.
+
+```console
+$ ./bank --db bank.txt open Ada 100
+opened account 1001 for Ada with 100.00
+$ ./bank --db bank.txt open Bob 0
+opened account 1002 for Bob with 0.00
+$ ./bank --db bank.txt deposit 1001 50.50
+deposit ok; balance of 1001 is 150.50
+$ ./bank --db bank.txt transfer 1001 1002 30
+transferred 30.00 from 1001 to 1002; 1001 now holds 120.50
+$ ./bank --db bank.txt withdraw 1002 999
+error: Insufficient funds for this operation.
+$ echo $?
+1
+```
+
+Available commands: `open <owner> <amount>`, `deposit <id> <amount>`,
+`withdraw <id> <amount>`, `transfer <from> <to> <amount>`, `statement <id>`,
+`list`.
+
+### Interactive menu
 
 ```console
 $ ./bank --db examples/demo_bank.txt
@@ -147,7 +176,7 @@ src/
   account.h/.cpp      an account, its balance and its immutable ledger
   bank.h/.cpp         the operations: open / deposit / withdraw / transfer, and invariants
   bank_store.h/.cpp   file-backed persistence with atomic rename-over-write and load-time integrity check
-  main.cpp            the menu-driven CLI
+  main.cpp            the CLI: interactive menu and scriptable commands
 tests/
   test_framework.h    tiny header-only assertion harness
   test_bank.cpp       29 cases across money, account, bank and persistence

@@ -1,15 +1,24 @@
 // Banking System — command line interface.
 //
-//   bank                use ./bank_data.txt as the data file
-//   bank --db <path>    use a different data file
-//   bank --help         show usage
-//   bank --version      print the version
+//   bank                       interactive menu, ./bank_data.txt as the data file
+//   bank --db <path>           use a different data file
+//   bank --help                show usage
+//   bank --version             print the version
+//
+// Non-interactive commands (scriptable — no menu, exit code says pass/fail):
+//   bank [--db <path>] open <owner> <opening>
+//   bank [--db <path>] deposit <id> <amount>
+//   bank [--db <path>] withdraw <id> <amount>
+//   bank [--db <path>] transfer <from> <to> <amount>
+//   bank [--db <path>] statement <id>
+//   bank [--db <path>] list
 //
 // Build:  make   (or)  g++ -std=c++17 -O2 -Isrc src/*.cpp -o bank
 
 #include <iostream>
 #include <limits>
 #include <string>
+#include <vector>
 
 #include "account.h"
 #include "bank.h"
@@ -198,32 +207,172 @@ int runMenu(bank::BankStore& store, bank::Bank& bank) {
     return 0;
 }
 
+void printUsage() {
+    std::cout << "Banking System " << kVersion << "\n\n"
+                 "USAGE\n"
+                 "  bank [--db <path>]                      interactive menu\n"
+                 "  bank [--db <path>] open <owner> <amt>   open an account\n"
+                 "  bank [--db <path>] deposit <id> <amt>   pay money in\n"
+                 "  bank [--db <path>] withdraw <id> <amt>  take money out\n"
+                 "  bank [--db <path>] transfer <from> <to> <amt>\n"
+                 "  bank [--db <path>] statement <id>       print a statement\n"
+                 "  bank [--db <path>] list                 list all accounts\n\n"
+                 "  --db <path>    data file to use (default: bank_data.txt)\n"
+                 "  --help         show this help\n"
+                 "  --version      print the version\n";
+}
+
+// Parses a money string on the command line, reporting a clear error on failure.
+bool parseAmountArg(const std::string& text, bank::Money& out) {
+    if (bank::Money::parse(text, out) && !out.isNegative()) return true;
+    std::cerr << "error: \"" << text << "\" is not a valid amount\n";
+    return false;
+}
+
+bool parseIdArg(const std::string& text, std::int64_t& out) {
+    try {
+        std::size_t consumed = 0;
+        const long long value = std::stoll(text, &consumed);
+        if (consumed == text.size()) {
+            out = value;
+            return true;
+        }
+    } catch (const std::exception&) {
+        // fall through
+    }
+    std::cerr << "error: \"" << text << "\" is not a valid account number\n";
+    return false;
+}
+
+// Runs a single non-interactive command. Returns a process exit code: 0 on
+// success, 1 when the operation is refused (e.g. insufficient funds), 2 on a
+// usage error. Persists after any change so scripts see the same file the menu
+// would write.
+int runCommand(bank::BankStore& store, bank::Bank& bank,
+               const std::vector<std::string>& args) {
+    const std::string& cmd = args[0];
+
+    auto need = [&](std::size_t count) -> bool {
+        if (args.size() != count) {
+            std::cerr << "error: \"" << cmd << "\" takes "
+                      << (count - 1) << " argument(s)\n";
+            return false;
+        }
+        return true;
+    };
+
+    auto saveOrFail = [&]() -> int {
+        std::string error;
+        if (!store.save(bank, error)) {
+            std::cerr << "error: could not save: " << error << "\n";
+            return 1;
+        }
+        return 0;
+    };
+
+    if (cmd == "open") {
+        if (!need(3)) return 2;
+        bank::Money opening;
+        if (!parseAmountArg(args[2], opening)) return 2;
+        const bank::Result result = bank.openAccount(args[1], opening);
+        if (!result.ok()) {
+            std::cerr << "error: " << bank::statusMessage(result.status) << "\n";
+            return 1;
+        }
+        std::cout << "opened account " << result.accountId << " for " << args[1]
+                  << " with " << opening.toString() << "\n";
+        return saveOrFail();
+    }
+
+    if (cmd == "deposit" || cmd == "withdraw") {
+        if (!need(3)) return 2;
+        std::int64_t id;
+        if (!parseIdArg(args[1], id)) return 2;
+        bank::Money amount;
+        if (!parseAmountArg(args[2], amount)) return 2;
+        const bank::Result result = (cmd == "deposit")
+            ? bank.deposit(id, amount, "cash deposit")
+            : bank.withdraw(id, amount, "cash withdrawal");
+        if (!result.ok()) {
+            std::cerr << "error: " << bank::statusMessage(result.status) << "\n";
+            return 1;
+        }
+        std::cout << cmd << " ok; balance of " << id << " is "
+                  << result.balance.toString() << "\n";
+        return saveOrFail();
+    }
+
+    if (cmd == "transfer") {
+        if (!need(4)) return 2;
+        std::int64_t fromId, toId;
+        if (!parseIdArg(args[1], fromId)) return 2;
+        if (!parseIdArg(args[2], toId)) return 2;
+        bank::Money amount;
+        if (!parseAmountArg(args[3], amount)) return 2;
+        const bank::Result result = bank.transfer(fromId, toId, amount, "transfer");
+        if (!result.ok()) {
+            std::cerr << "error: " << bank::statusMessage(result.status) << "\n";
+            return 1;
+        }
+        std::cout << "transferred " << amount.toString() << " from " << fromId
+                  << " to " << toId << "; " << fromId << " now holds "
+                  << result.balance.toString() << "\n";
+        return saveOrFail();
+    }
+
+    if (cmd == "statement") {
+        if (!need(2)) return 2;
+        std::int64_t id;
+        if (!parseIdArg(args[1], id)) return 2;
+        const bank::Account* account = bank.find(id);
+        if (account == nullptr) {
+            std::cerr << "error: " << bank::statusMessage(bank::Status::AccountNotFound) << "\n";
+            return 1;
+        }
+        printStatement(*account);
+        return 0;
+    }
+
+    if (cmd == "list") {
+        if (!need(1)) return 2;
+        listAccounts(bank);
+        return 0;
+    }
+
+    std::cerr << "error: unknown command \"" << cmd << "\"\n";
+    printUsage();
+    return 2;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
     std::string dbPath = "bank_data.txt";
+    std::vector<std::string> positional;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
-            std::cout << "Banking System " << kVersion << "\n\n"
-                         "USAGE\n"
-                         "  bank [--db <path>]\n\n"
-                         "  --db <path>    data file to use (default: bank_data.txt)\n"
-                         "  --help         show this help\n"
-                         "  --version      print the version\n";
+            printUsage();
             return 0;
         }
         if (arg == "--version" || arg == "-v") {
             std::cout << "bank " << kVersion << "\n";
             return 0;
         }
-        if (arg == "--db" && i + 1 < argc) {
+        if (arg == "--db") {
+            if (i + 1 >= argc) {
+                std::cerr << "error: --db needs a path\n";
+                return 2;
+            }
             dbPath = argv[++i];
             continue;
         }
-        std::cerr << "error: unrecognised argument \"" << arg << "\"\n";
-        return 2;
+        if (arg.rfind("--", 0) == 0) {
+            std::cerr << "error: unrecognised option \"" << arg << "\"\n";
+            return 2;
+        }
+        positional.push_back(arg);
     }
 
     bank::BankStore store(dbPath);
@@ -233,6 +382,12 @@ int main(int argc, char* argv[]) {
     if (!store.load(bank, error)) {
         std::cerr << "error: could not load " << dbPath << ": " << error << "\n";
         return 1;
+    }
+
+    // A positional argument selects non-interactive command mode; with none, fall
+    // back to the interactive menu.
+    if (!positional.empty()) {
+        return runCommand(store, bank, positional);
     }
 
     printBanner(store, bank);

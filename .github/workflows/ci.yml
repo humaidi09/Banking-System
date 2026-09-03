@@ -40,8 +40,11 @@ jobs:
       - name: A transfer conserves money and persists exactly
         shell: bash
         run: |
-          # Open two accounts, deposit, transfer, then exit.
-          printf '1\nAda\n100\n1\nBob\n0\n2\n1001\n50.50\n4\n1001\n1002\n30\n0\n' | ./bank --db ci_bank.txt
+          # Drive the scriptable command mode, one operation per invocation.
+          ./bank --db ci_bank.txt open Ada 100
+          ./bank --db ci_bank.txt open Bob 0
+          ./bank --db ci_bank.txt deposit 1001 50.50
+          ./bank --db ci_bank.txt transfer 1001 1002 30
           echo "--- stored data ---"
           cat ci_bank.txt
           # Ada: 100 + 50.50 - 30 = 120.50 -> 12050 minor units on her ACCOUNT line.
@@ -55,9 +58,11 @@ jobs:
       - name: An overdrawn withdrawal is refused
         shell: bash
         run: |
-          out=$(printf '1\nAda\n10\n3\n1001\n999\n0\n' | ./bank --db ci_bank2.txt)
-          echo "$out" | grep -q 'Insufficient funds' \
-            || { echo "FAIL: an overdraft was not refused"; exit 1; }
+          ./bank --db ci_bank2.txt open Ada 10
+          # The command must fail (non-zero exit) and say why.
+          if ./bank --db ci_bank2.txt withdraw 1001 999; then
+            echo "FAIL: an overdraft was not refused"; exit 1
+          fi
           echo "OK: overdraft refused"
 
       - name: A tampered data file is rejected on load
@@ -65,7 +70,7 @@ jobs:
         run: |
           # A balance that does not match the ledger must fail the integrity check.
           printf 'ACCOUNT\t1001\t99999\t1\tMallory\nENTRY\tOPEN\t100\t100\t0\topened\n' > tampered.txt
-          if ./bank --db tampered.txt < /dev/null; then
+          if ./bank --db tampered.txt list; then
             echo "FAIL: a tampered ledger was accepted"; exit 1
           fi
           echo "OK: tampered ledger rejected"
