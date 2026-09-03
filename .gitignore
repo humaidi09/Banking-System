@@ -1,0 +1,19 @@
+# Build artefacts
+*.o
+*.obj
+*.exe
+*.out
+bank
+run_tests
+
+# Runtime data and test leftovers
+bank_data.txt
+*.txt.tmp
+test_bank_*.txt
+smoke.txt
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
