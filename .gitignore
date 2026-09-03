@@ -17,3 +17,7 @@ smoke.txt
 .idea/
 .DS_Store
 Thumbs.db
+
+# local CI debug logs
+winlog.txt
+*.log
